@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120mm" height="80mm">
+  <!-- Cut line (solid) and fold line (dashed), in mm. Non-printing. -->
+  <rect x="0.15" y="0.15" width="119.7" height="79.7" rx="3" fill="none" stroke="#00a3a3" stroke-width="0.3"/>
+  <line x1="60" y1="0" x2="60" y2="80" stroke="#00a3a3" stroke-width="0.3" stroke-dasharray="2 1.5"/>
+  <circle cx="114" cy="4" r="1.5" fill="none" stroke="#00a3a3" stroke-width="0.3"/>
+</svg>

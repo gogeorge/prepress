@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "next-example",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--workspace", "prepress-next-example", "--", "--port", "3217"],
+      "port": 3217
+    }
+  ]
+}

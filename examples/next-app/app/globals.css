@@ -1,0 +1,57 @@
+@font-face {
+  font-family: "Inter";
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+  src: url("/fonts/inter-latin-400-normal.woff") format("woff");
+}
+@font-face {
+  font-family: "Inter";
+  font-weight: 700;
+  font-style: normal;
+  font-display: block;
+  src: url("/fonts/inter-latin-700-normal.woff") format("woff");
+}
+
+:root {
+  --bg: #f4f4f2;
+  --fg: #1b1b1b;
+  --muted: #5d5d5d;
+  --card: #ffffff;
+  --border: #dcdcd8;
+  --accent: #d42a2a;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161616;
+    --fg: #ececec;
+    --muted: #a3a3a3;
+    --card: #222222;
+    --border: #3a3a3a;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+.lede { color: var(--muted); margin: 0 0 24px; max-width: 70ch; }
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-bottom: 24px; }
+.controls label { display: inline-flex; gap: 6px; align-items: center; }
+.labels { display: grid; gap: 32px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+.card h2 { font-size: 16px; margin: 0 0 16px; }
+.row { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
+.artboard-wrap { overflow-x: auto; max-width: 100%; padding: 4px; }
+.side { flex: 1 1 320px; min-width: 0; display: grid; gap: 12px; }
+.buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+button.action {
+  font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--fg);
+}
+button.action.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.result { font-size: 13px; white-space: pre-wrap; margin: 0; color: var(--muted); }
+.result.error { color: var(--accent); }
+.note { font-size: 13px; color: var(--muted); margin-top: 32px; }
