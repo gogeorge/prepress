@@ -4,6 +4,9 @@
   "description": "React components for print-ready labels and packaging artwork: millimetres, inks and regulations instead of pixels, hex codes and viewports, with a preflight engine and PDF export.",
   "license": "MIT",
   "type": "module",
+  "publishConfig": { 
+    "access": "public" 
+  },
   "keywords": [
     "react",
     "nextjs",
@@ -79,5 +82,18 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "directories": {
+    "example": "examples",
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gogeorge/prepress.git"
+  },
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/gogeorge/prepress/issues"
+  },
+  "homepage": "https://github.com/gogeorge/prepress#readme"
 }

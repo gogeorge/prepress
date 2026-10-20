@@ -32,6 +32,13 @@ export interface WritePDFOptions {
   fonts?: FontSource[];
   /** PDF document title. Default: the artboard id. */
   title?: string;
+  /**
+   * PDF for editing in Adobe Illustrator: no clip group around the artwork,
+   * text at 100% horizontal scale in its real font name, crop and registration
+   * marks in one group of their own. Text is drawn at its natural width, so
+   * lines can be slightly longer or shorter than on screen. Default false.
+   */
+  editable?: boolean;
 }
 
 export interface ExportPDFOptions extends WritePDFOptions {
@@ -93,6 +100,7 @@ export async function writePDF(
     ],
   };
   if (options.title !== undefined) writeInput.title = options.title;
+  if (options.editable) writeInput.editable = true;
   const bytes = await writePdf(writeInput, warnings);
 
   return {

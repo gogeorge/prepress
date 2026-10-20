@@ -40,7 +40,7 @@ Using the font file means "x-height" is the font designer's value (OS/2 `sxHeigh
 
 Browsers cannot produce print PDFs (no CMYK, no bleed or marks), and HTML-to-canvas tools rasterise text. Instead each component describes what it prints as vector primitives (rectangles, text runs, lines) measured from the live DOM:
 
-- Text is extracted per line fragment with DOM `Range` rectangles, so wrapping, hyphenation and `fit="shrink"` results are copied exactly. Each run is drawn with a horizontal scale that matches its measured width, so line breaks in the PDF match the screen even when the PDF font differs slightly.
+- Text is extracted per line fragment with DOM `Range` rectangles, so wrapping, hyphenation and `fit="shrink"` results are copied exactly. Each run is drawn with a horizontal scale that matches its measured width, so line breaks in the PDF match the screen even when the PDF font differs slightly. `editable` mode doesn't do this (§11).
 - Barcodes are drawn from the encoder output, not from the SVG.
 - Panels contribute background rectangles, extended into the bleed.
 
@@ -83,3 +83,46 @@ Printing a dieline properly means a spot colour (often named `CutContour` or `Di
 ## 10. Exports keep working in background tabs
 
 Browsers pause `requestAnimationFrame` and throttle `setTimeout` (down to once a minute) in background tabs. `flush()` waits for a frame or 50 ms, whichever comes first, and the writer calls pdf-lib's `save({ objectsPerTick: Infinity })` so it never yields to a throttled timer. Live preflight still runs on animation frames, so it pauses while a tab is hidden and catches up when it is shown.
+
+## 11. Illustrator-friendly export (`editable`)
+
+Print output squeezes each text run with a `cm` scale and clips the artwork to the bleed (§3). That is right for print, but painful to edit in Illustrator. `editable: true` writes a variant for designers. Print output is unchanged, and `tests/golden/` guards it byte for byte.
+
+**Spike.** `scripts/spike-illustrator/` writes one label in 16 variants and has Illustrator 2024 (macOS) open each one through ExtendScript. It records layers, groups, text frames, horizontal scale and font resolution.
+
+| Mechanism | What Illustrator does |
+|---|---|
+| Outer `q … re W n … Q` clip | Clip group around all the artwork. |
+| Per-run `q cm … Q` with `sx` | One point-text object per run with that horizontal scale (98–103%). Without `cm`: 100%. |
+| Optional content groups (`/OC … BDC/EMC`) | Ignored. Everything goes on "Layer 1". |
+| `q/Q` blocks without a clip | Ignored. No groups. |
+| Form XObjects | One group each, always a **clip group** clipped to the BBox. With `/Group /Transparency` it is a clip group nested in another clip group. |
+| Runs in one `BT … ET` with `Tf` switches | Still one point-text object per show operator. Consecutive same-font `Tj`s without a `Tf` between them are also split. Text is never joined, and is always point text. |
+| `BaseFont` as written by pdf-lib (`ArialMT-2708`) | Not matched: shows as a missing font, even when Arial is installed. This affected v0.1.0 output. |
+| `BaseFont` = PostScript name, with or without an `ABCDEF+` tag, subset or whole | Matched to the installed font. |
+| Standard-14 names (`Helvetica`, `Times-Bold`) | Matched to the installed fonts. |
+
+**What editable mode does with this:**
+
+- No outer clip.
+- Text runs are drawn as `BT, colour, Tf, Tm, Tj, ET`, with no `q/cm/Q`, at natural width. On one line, a run that started where the previous one ended on screen starts where the previous one actually ends in the PDF. Runs never overlap, but a line can come out longer or shorter than on screen. Runs off by more than 3% are listed in `warnings`.
+- Runs are not merged, since Illustrator splits them anyway.
+- Custom fonts are embedded with `BaseFont` set to their PostScript name. Subset fonts (WOFF) are tagged with a six-letter tag derived from the name, so output stays deterministic. TTF/OTF were already embedded whole. WOFF still has to be subset, because that is how pdf-lib converts it to TrueType. The spike showed subsetting does not affect matching. `warnings` lists every font family and PostScript name used.
+- Crop and registration marks go in one Form XObject. Illustrator opens it as a single group (a clip group, clipped to the page) that can be selected and deleted in one step. Artwork stays loose on the page, because any grouping would add clip groups.
+- No OCGs. Illustrator ignores them, and they would only add structure for other viewers.
+
+**Not done:**
+
+- **Per-panel groups** (an optional `group` on primitives). They would arrive as clip groups, which is what this mode exists to avoid.
+- **Dieline layer.** It relied on an OCG with `/PrintState /OFF`. Illustrator drops OCGs, so the dieline would open as an ordinary printing path. A dieline needs a spot colour (§9), which is still out of scope.
+- **Area text and paragraph reflow.** PDF has no paragraphs, and Illustrator always creates point text.
+
+Re-run the spike after Illustrator updates:
+
+```bash
+npm run build
+node scripts/spike-illustrator/generate.mjs "$PWD/spike-out"
+osascript scripts/spike-illustrator/inspect.applescript "$PWD/spike-out"
+```
+
+`inspect.applescript` needs an absolute folder path. Results are written to `spike-out/results.json`. Variant 20 is the shipped `editable` mode.

@@ -271,10 +271,32 @@ Pipeline: **render** (vector display list measured from the DOM) → **marks** �
 | `colorPass` | `ColorPass` | | Custom colour pass; overrides `colorMode`. |
 | `fonts` | `FontSource[]` | | Fonts to embed in addition to registered ones. |
 | `title` | `string` | artboard id | PDF title. |
+| `editable` | `boolean` | `false` | PDF for editing in Adobe Illustrator. See [PDF for Illustrator](#pdf-for-illustrator). When `false`, output is unchanged. |
 
 `ExportResult`: `bytes` (`Uint8Array`), `blob`, `inks` (ink-to-CMYK map of the inks used), `issues`, `warnings` (font substitutions and similar), `pageSizeMm`.
 
 The page is trim + bleed + mark area. TrimBox and BleedBox are set. Artwork is clipped to the bleed. Text is vector text; each line is scaled horizontally to match its measured on-screen width so line breaks match the screen. The ink map is embedded as an attached `prepress-inks.json` and in the `PrepressInks` Info entry. v1 output is not PDF/X and has no ICC output intent.
+
+#### PDF for Illustrator
+
+`editable: true` writes a PDF that a designer can open in Illustrator and edit without cleaning it up first:
+
+```tsx
+const result = await exportPDF(ref, { marks: true, editable: true });
+downloadPDF(result, "label-illustrator.pdf");
+```
+
+- **No clip group.** There is no clip around the artwork. TrimBox and BleedBox are still set.
+- **Editable text.** Every text run is a point-text object at 100% horizontal scale, in the right font when that font is installed. Embedded fonts keep their real PostScript name so Illustrator can match them. `warnings` lists every font used.
+- **Marks.** Crop and registration marks are one group that you can select and delete separately from the artwork.
+
+What it costs, and what Illustrator does not keep (tested in Illustrator 2024, see `DECISIONS.md` §11):
+
+- Text is drawn at the PDF font's natural width, not squeezed to the screen. A line can come out slightly longer or shorter than on screen. `warnings` lists runs that differ by more than 3%.
+- Each style run is its own text object: a line with bold allergens is several objects. Illustrator splits text at every font change, whatever the PDF says.
+- Everything is on one layer. Illustrator flattens PDF layers.
+- The marks group is a clip group, clipped to the page. That is how Illustrator opens every PDF group.
+- Dielines are not included. Illustrator would open them as printing paths.
 
 Other export helpers: `downloadPDF(result, filename)` (browser) and `writePDF({ spec, inks, primitives }, options)`, which runs the marks, colour and write stages on a display list without a DOM (Node or server).
 

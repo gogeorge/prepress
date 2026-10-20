@@ -39,6 +39,7 @@ export async function loadFontkit(): Promise<{ create(bytes: Uint8Array): Fontki
 }
 
 export interface FontkitFont {
+  postscriptName?: string | null;
   unitsPerEm: number;
   xHeight: number;
   glyphForCodePoint(cp: number): { id: number; bbox: { maxY: number } };

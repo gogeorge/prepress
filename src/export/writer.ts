@@ -3,7 +3,7 @@
  * Runs in the browser and in Node (no DOM). pdf-lib and fontkit are loaded
  * on first use so they stay out of the main bundle.
  */
-import type { PDFFont, PDFPage, Color } from "pdf-lib";
+import type { PDFFont, PDFName, PDFOperator, PDFPage, Color } from "pdf-lib";
 import { loadFontkit, loadedFonts, matchFont, parseFamilies, type LoadedFont } from "../measure/fonts.js";
 import type { ArtboardSpec } from "../preflight/types.js";
 import { MM_PER_INCH, PT_PER_INCH } from "../units/index.js";
@@ -28,6 +28,23 @@ export interface WriteInput {
   info?: Record<string, string>;
   /** Fonts to embed, in addition to fonts registered with `registerFont`. */
   fonts?: LoadedFont[];
+  /** Illustrator-friendly output (DECISIONS.md §11): no outer clip, unscaled text, marks in their own group, real font names. */
+  editable?: boolean;
+}
+
+/** Text runs whose natural width differs from the measured width by more than this fraction get a warning in editable mode. */
+const WIDTH_TOLERANCE = 0.03;
+
+/**
+ * A six-letter subset tag (PDF 32000 §9.6.4) derived from the font name, so
+ * output is deterministic. Illustrator strips the tag when matching fonts.
+ */
+export function subsetTag(name: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0;
+  let tag = "";
+  for (let i = 0; i < 6; i++, h = Math.floor(h / 26)) tag += String.fromCharCode(65 + (h % 26));
+  return tag;
 }
 
 type StandardName =
@@ -61,11 +78,34 @@ export function standardFontFor(font: FontRef): StandardName {
   return (bold ? (it ? "Helvetica-BoldOblique" : "Helvetica-Bold") : it ? "Helvetica-Oblique" : "Helvetica") as StandardName;
 }
 
+/** Content-stream operators for a shape primitive, matching what the page draw calls emit. */
+function shapeOperators(
+  lib: typeof import("pdf-lib"),
+  p: ColoredPrimitive,
+  X: (mm: number) => number,
+  Y: (mm: number) => number,
+  color: Color,
+): PDFOperator[] {
+  const zero = lib.degrees(0);
+  switch (p.kind) {
+    case "rect":
+      return lib.drawRectangle({ x: X(p.x), y: Y(p.y + p.height), width: p.width * K, height: p.height * K, color, borderWidth: 0, borderColor: undefined, rotate: zero, xSkew: zero, ySkew: zero });
+    case "line":
+      return lib.drawLine({ start: { x: X(p.x1), y: Y(p.y1) }, end: { x: X(p.x2), y: Y(p.y2) }, thickness: p.strokeWidth * K, color });
+    case "circle":
+      return lib.drawEllipse({ x: X(p.cx), y: Y(p.cy), xScale: p.r * K, yScale: p.r * K, color: undefined, borderColor: color, borderWidth: p.strokeWidth * K });
+    case "text":
+      throw new Error("shapeOperators: text is not a shape");
+  }
+}
+
 /** Writes the PDF and returns its bytes. `warnings` collects font substitutions and similar. */
 export async function writePdf(input: WriteInput, warnings: string[]): Promise<Uint8Array> {
   const lib = await import("pdf-lib");
   const { PDFDocument, rgb, cmyk, pushGraphicsState, popGraphicsState, concatTransformationMatrix, rectangle, clip, endPath, PDFName, PDFString } = lib;
+  const { beginText, endText, setFillingColor, setFontAndSize, setTextMatrix, showText } = lib;
   const { spec, marks } = input;
+  const editable = input.editable === true;
   const [w, h] = spec.trim;
   const M = marks.margin;
   const pageW = (w + 2 * M) * K;
@@ -86,12 +126,23 @@ export async function writePdf(input: WriteInput, warnings: string[]): Promise<U
   const fontCache = new Map<string, Promise<PDFFont>>();
   let fontkitRegistered = false;
   const woff2Warned = new Set<string>();
+  // Family -> PostScript names, for the editable-mode font list.
+  const fontsUsed = new Map<string, Set<string>>();
+  const usedFonts = (family: string) => {
+    let names = fontsUsed.get(family);
+    if (!names) fontsUsed.set(family, (names = new Set()));
+    return names;
+  };
   const fontFor = (f: FontRef): Promise<PDFFont> => {
     let custom = matchFont(candidates, f.family, f.weight, f.italic);
     if (custom && isWoff2(custom.bytes)) {
       if (!woff2Warned.has(custom.source.family)) {
         woff2Warned.add(custom.source.family);
-        warnings.push(`Font "${custom.source.family}" is WOFF2, which cannot be embedded in v1; register a TTF, OTF or WOFF file for export.`);
+        warnings.push(
+          editable
+            ? `Font "${custom.source.family}" is WOFF2, which cannot be embedded; text in ${custom.source.family} will open in Illustrator as ${standardFontFor(f)}. Register a TTF, OTF or WOFF file for export.`
+            : `Font "${custom.source.family}" is WOFF2, which cannot be embedded in v1; register a TTF, OTF or WOFF file for export.`,
+        );
       }
       custom = undefined;
     }
@@ -106,17 +157,42 @@ export async function writePdf(input: WriteInput, warnings: string[]): Promise<U
           }
           // pdf-lib copies unsubsetted font data verbatim, which is only valid for TTF/OTF.
           // Subsetting re-encodes WOFF as TrueType.
-          return doc.embedFont(custom.bytes, { subset: isWoff(custom.bytes) });
+          const subset = isWoff(custom.bytes);
+          if (!editable) return doc.embedFont(custom.bytes, { subset });
+          // pdf-lib names fonts "<PostScript name>-<random digits>", which Illustrator
+          // cannot match to an installed font. Use the real name, tagged when subset.
+          const psName = ((await loadFontkit()).create(custom.bytes).postscriptName || custom.source.family).replace(/[^\x21-\x7e]|[()<>[\]{}/%#]/g, "");
+          usedFonts(custom.source.family).add(psName);
+          return doc.embedFont(custom.bytes, { subset, customName: subset ? `${subsetTag(psName)}+${psName}` : psName });
         }
         const std = standardFontFor(f);
         const first = (f.family.split(",")[0] ?? f.family).trim().replace(/^["']|["']$/g, "");
-        if (!GENERIC.has(first.toLowerCase())) warnings.push(`Font "${first}" (${f.weight}${f.italic ? " italic" : ""}) is not registered; substituted ${std}. Register the font file with registerFont() to embed it.`);
+        if (!GENERIC.has(first.toLowerCase())) {
+          const face = `${f.weight}${f.italic ? " italic" : ""}`;
+          warnings.push(
+            editable
+              ? `Font "${first}" (${face}) is not registered; text in ${first} will open in Illustrator as ${std}. Register the font file with registerFont() to embed it.`
+              : `Font "${first}" (${face}) is not registered; substituted ${std}. Register the font file with registerFont() to embed it.`,
+          );
+        }
+        if (editable) usedFonts(std.split("-")[0]!).add(std);
         return doc.embedFont(std);
       })();
       fontCache.set(key, p);
     }
     return p;
   };
+
+  const fontKeys = new Map<PDFFont, PDFName>();
+  const fontKey = (font: PDFFont) => {
+    let key = fontKeys.get(font);
+    if (!key) fontKeys.set(font, (key = page.node.newFontDictionary(font.name, font.ref)));
+    return key;
+  };
+  const widthMismatches: string[] = [];
+  // Where the last text run ended, on screen (mm) and as drawn (pt), so the next
+  // run on the same line follows the drawn text instead of overlapping it.
+  let prevRun: { baseline: number; screenEnd: number; drawnEnd: number } | undefined;
 
   const draw = async (items: ColoredPrimitive[]) => {
     for (const p of items) {
@@ -144,6 +220,27 @@ export async function writePdf(input: WriteInput, warnings: string[]): Promise<U
           }
           const size = p.fontSize * K;
           const natural = font.widthOfTextAtSize(text, size);
+          if (editable) {
+            // Natural width, no transform: Illustrator shows 100% horizontal scale.
+            if (p.width !== undefined && p.width > 0 && Math.abs(natural / (p.width * K) - 1) > WIDTH_TOLERANCE) {
+              widthMismatches.push(`"${text}" (${Math.round((natural / (p.width * K)) * 100)}%)`);
+            }
+            const follows =
+              prevRun && p.align !== "center" && Math.abs(p.baseline - prevRun.baseline) < 0.01 && Math.abs(p.x - prevRun.screenEnd) < 0.1;
+            const x = follows ? prevRun!.drawnEnd : X(p.x) - (p.align === "center" ? natural / 2 : 0);
+            const y = Y(p.baseline);
+            prevRun = p.width !== undefined && p.align !== "center" ? { baseline: p.baseline, screenEnd: p.x + p.width, drawnEnd: x + natural } : undefined;
+            page.pushOperators(
+              beginText(),
+              setFillingColor(color),
+              setFontAndSize(fontKey(font), size),
+              setTextMatrix(1, 0, 0, 1, x, y),
+              showText(font.encodeText(text)),
+              endText(),
+            );
+            if (p.underline) page.drawRectangle({ x, y: y - size * 0.12, width: natural, height: size * 0.06, color });
+            break;
+          }
           let sx = 1;
           if (p.width !== undefined && natural > 0) {
             sx = (p.width * K) / natural;
@@ -163,16 +260,41 @@ export async function writePdf(input: WriteInput, warnings: string[]): Promise<U
     }
   };
 
-  // Artwork, clipped to the bleed box.
-  page.pushOperators(
-    pushGraphicsState(),
-    rectangle(X(-spec.bleed), Y(h + spec.bleed), (w + 2 * spec.bleed) * K, (h + 2 * spec.bleed) * K),
-    clip(),
-    endPath(),
-  );
-  await draw(input.artwork);
-  page.pushOperators(popGraphicsState());
-  await draw(input.markPrimitives);
+  if (editable) {
+    // No outer clip: Illustrator turns it into a clip group around everything,
+    // and the TrimBox and BleedBox already record the page geometry.
+    await draw(input.artwork);
+    // Illustrator flattens optional content (layers) and ignores q/Q, but opens a
+    // Form XObject as a group, so the marks become one group that can be deleted.
+    if (input.markPrimitives.length) {
+      const ops = input.markPrimitives.flatMap((p) => shapeOperators(lib, p, X, Y, toColor(p.color)));
+      const form = doc.context.obj({ Type: "XObject", Subtype: "Form", BBox: [0, 0, pageW, pageH] });
+      const ref = doc.context.register(lib.PDFContentStream.of(form, ops));
+      page.pushOperators(lib.drawObject(page.node.newXObject("Marks", ref)));
+    }
+    if (widthMismatches.length) {
+      const shown = widthMismatches.slice(0, 5).join(", ");
+      const more = widthMismatches.length > 5 ? ` and ${widthMismatches.length - 5} more` : "";
+      warnings.push(
+        `Text drawn at its natural width differs from the screen layout by more than ${WIDTH_TOLERANCE * 100}%: ${shown}${more}. Lines may break differently when edited in Illustrator.`,
+      );
+    }
+    if (fontsUsed.size) {
+      const list = [...fontsUsed].map(([family, names]) => `${family} (${[...names].join(", ")})`).join("; ");
+      warnings.push(`Fonts used: ${list}. Text stays editable in Illustrator only where these fonts are installed.`);
+    }
+  } else {
+    // Artwork, clipped to the bleed box.
+    page.pushOperators(
+      pushGraphicsState(),
+      rectangle(X(-spec.bleed), Y(h + spec.bleed), (w + 2 * spec.bleed) * K, (h + 2 * spec.bleed) * K),
+      clip(),
+      endPath(),
+    );
+    await draw(input.artwork);
+    page.pushOperators(popGraphicsState());
+    await draw(input.markPrimitives);
+  }
 
   doc.setTitle(input.title ?? spec.id);
   doc.setProducer("@crasi/prepress");
